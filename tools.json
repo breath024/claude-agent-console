@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Claude",
+    "cmd": "claude"
+  },
+  {
+    "name": "Ollama · qwen2.5:14b",
+    "cmd": "ollama run qwen2.5:14b"
+  },
+  {
+    "name": "Ollama · gemma3:27b",
+    "cmd": "ollama run gemma3:27b",
+    "heavy": true
+  },
+  {
+    "name": "Ollama · qwen2.5:32b",
+    "cmd": "ollama run qwen2.5:32b",
+    "heavy": true
+  },
+  {
+    "name": "터미널(cmd)",
+    "cmd": ""
+  }
+]
