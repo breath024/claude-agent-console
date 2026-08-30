@@ -49,7 +49,7 @@ tkinter로 만들었다.
 
 ## 실행
 
-`에이전트 관리.lnk` 실행. 설정은 `console_config.json`과 `projects.json`에 있다.
+`python agent_console.py` 실행(바로가기를 만들어 두면 편하다). 설정은 `console_config.json`과 `projects.json`에 있다.
 
 둘 다 개인 경로가 들어가서 저장소에는 올리지 않았다. `*.example.json`을 복사해 쓰면 된다.
 파일이 없으면 코드 안의 기본값으로 동작한다. `launcher.ps1`도 같은 `projects.json`을 읽는다.
