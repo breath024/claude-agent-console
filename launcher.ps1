@@ -3,7 +3,7 @@
 
 $projects = [ordered]@{
   '1' = @{ name = '홈';            path = 'C:\Users\USER' }
-  '2' = @{ name = '내 프로젝트';        path = 'C:\Users\USER\Desktop\창업\myproject' }
+  '2' = @{ name = '내 프로젝트';   path = 'C:\Users\USER\Desktop\myproject' }
   '3' = @{ name = '주식봇';        path = 'C:\Users\USER\Desktop\창업\주식봇' }
   '4' = @{ name = '코인봇';        path = 'C:\Users\USER\Desktop\창업\코인봇' }
   '5' = @{ name = '중국어 공부';   path = 'C:\Users\USER\Desktop\중국어 공부' }

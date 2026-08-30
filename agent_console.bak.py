@@ -64,7 +64,7 @@ CUSTOM_LABEL = "📁 직접 경로 선택…"
 
 DEFAULT_PROJECTS = [
     {"name": "홈",            "path": r"C:\Users\USER"},
-    {"name": "내 프로젝트",        "path": r"C:\Users\USER\Desktop\창업\myproject"},
+    {"name": "내 프로젝트",   "path": r"C:\Users\USER\Desktop\myproject"},
     {"name": "주식봇",        "path": r"C:\Users\USER\Desktop\창업\주식봇"},
     {"name": "코인봇",        "path": r"C:\Users\USER\Desktop\창업\코인봇"},
     {"name": "중국어 공부",   "path": r"C:\Users\USER\Desktop\중국어 공부"},
