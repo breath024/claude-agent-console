@@ -186,18 +186,21 @@ class Tip:
 
 # ---- 콘솔 글꼴 개선(HKCU\Console 기본값, 종료 시 원복) ----
 def apply_console_prefs():
-    """새 콘솔이 상속할 기본 글꼴을 보기 좋게(Consolas 18, QuickEdit).
+    """새 콘솔이 상속할 기본 글꼴을 보기 좋게(Consolas 18) + QuickEdit 끔.
     기존 값을 저장해서 종료 때 되돌린다. 실패하면 조용히 무시(no-op)."""
     try:
         key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Console")
     except Exception:
         return None
     saved = {}
+    # QuickEdit=0(끔). 켜두면 콘솔 안을 클릭/드래그하는 순간 '선택 모드'로
+    # 들어가 출력이 통째로 멈춘다(아무 키나 누르면 풀림). 타일로 띄워 클릭 전환이
+    # 잦은 이 앱에선 그게 '중간중간 멈춤'의 원인이라 반드시 꺼야 한다.
     new = {"FaceName": (winreg.REG_SZ, "Consolas"),
            "FontFamily": (winreg.REG_DWORD, 0x36),
            "FontWeight": (winreg.REG_DWORD, 400),
            "FontSize": (winreg.REG_DWORD, 18 << 16),
-           "QuickEdit": (winreg.REG_DWORD, 1)}
+           "QuickEdit": (winreg.REG_DWORD, 0)}
     try:
         for name, (typ, val) in new.items():
             try:
@@ -350,6 +353,7 @@ class App:
         self._drag_div = None                                # 'v'/'h' 구분선 드래그 중
         self._suppress_fg = False                            # 우클릭 메뉴 중 콘솔 포커스 탈취 방지
         self.slots = []                                      # 타일 슬롯: index=칸, 값=iid 또는 None
+        self.folders = {}                                    # 프로젝트명 → 폴더 트리노드 iid
         self._cell_labels = {}                               # 빈 칸 안내 라벨 풀
         self._busy = False
         self._pending = []
@@ -734,18 +738,19 @@ class App:
         ttk.Label(left, text="에이전트", foreground=DARK_SUBTLE,
                   font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 6))
 
-        self.tree = ttk.Treeview(left, columns=("name", "up"), show="headings",
+        self.tree = ttk.Treeview(left, columns=("up",), show="tree headings",
                                  height=20, selectmode="browse")
-        self.tree.heading("name", text="에이전트")
+        self.tree.heading("#0", text="에이전트")
         self.tree.heading("up", text="경과")
-        self.tree.column("name", width=200, anchor="w")
-        self.tree.column("up", width=64, anchor="e")
+        self.tree.column("#0", width=212, anchor="w")
+        self.tree.column("up", width=58, anchor="e", stretch=False)
         self.tree.tag_configure("run", foreground=RUN_FG)
         self.tree.tag_configure("dead", foreground=DEAD_FG)
+        self.tree.tag_configure("folder", font=("Segoe UI", 10, "bold"))
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", lambda ev: self.show_selected())
         self.tree.bind("<Button-3>", self._popup_menu)
-        self.tree.bind("<Double-1>", lambda ev: self.rename(self._sel(quiet=True)))
+        self.tree.bind("<Double-1>", self._on_double)
         self.tree.bind("<ButtonPress-1>", self._drag_start)
         self.tree.bind("<B1-Motion>", self._drag_motion)
         self.tree.bind("<ButtonRelease-1>", self._drag_release)
@@ -774,7 +779,7 @@ class App:
         self._tip(ttk.Button(info, text="⛶", width=3, command=self.toggle_max),
                   "전체보기: 목록·상단 숨기고 콘솔만 크게 (F11)").pack(side="right", padx=(0, 8))
         # 분할(타일) 선택
-        sb = ttk.Menubutton(info, text="분할 ▾")
+        sb = ttk.Menubutton(info)
         sm = tk.Menu(sb, tearoff=0)
         _style_menu(sm)
         self.v_layout = tk.IntVar(value=self.layout)
@@ -785,6 +790,8 @@ class App:
         sm.add_command(label="타일 구성…", command=self.configure_tiles)
         sb["menu"] = sm
         sb.pack(side="right", padx=(0, 8))
+        self.split_btn = sb
+        self._update_layout_label()           # 현재 분할 상태를 버튼에 표시(자동 갱신)
         self._tip(sb, "콘솔을 1·2·4칸으로 나눠 동시에 보기\n빈 칸 클릭/끌어놓기로 채움")
 
         self._tip(ttk.Button(info, text="종료", width=6,
@@ -819,30 +826,121 @@ class App:
         self._placeholder.place(x=0, y=0, relwidth=1, relheight=1)
 
     def _build_menu(self):
+        # 메뉴는 우클릭 시점에 그룹 목록까지 반영해 즉석에서 만든다(_agent_menu/_folder_menu)
+        pass
+
+    def _group_labels(self):
+        """현재 존재하는 그룹 이름들(트리 표시 순서)."""
+        out = []
+        for k, fid in self.folders.items():
+            if self.tree.exists(fid):
+                out.append(k)
+        return out
+
+    def _agent_menu(self, iid):
         m = tk.Menu(self.root, tearoff=0)
         _style_menu(m)
         m.add_command(label="보기(앞으로)", command=lambda: self.show_selected())
-        m.add_command(label="이름 변경…", command=lambda: self.rename(self._sel()))
-        m.add_command(label="폴더 열기", command=lambda: self.open_folder(self._sel()))
+        m.add_command(label="이름 변경…", command=lambda: self.rename(iid))
+        m.add_command(label="폴더 열기", command=lambda: self.open_folder(iid))
+        gm = tk.Menu(m, tearoff=0)
+        _style_menu(gm)
+        cur = self.agents.get(iid, {}).get("group")
+        for label in self._group_labels():
+            gm.add_command(label=("● " if label == cur else "    ") + label,
+                           command=lambda l=label, iid=iid: self.move_to_group(iid, l))
+        if self._group_labels():
+            gm.add_separator()
+        gm.add_command(label="＋ 새 그룹…", command=lambda iid=iid: self.move_to_new_group(iid))
+        m.add_cascade(label="그룹 이동", menu=gm)
         m.add_separator()
-        m.add_command(label="복제(같은 폴더·주제로)", command=lambda: self.duplicate(self._sel()))
-        m.add_command(label="재시작", command=lambda: self.restart(self._sel()))
-        m.add_command(label="분리(팝아웃)", command=lambda: self.detach_selected(self._sel()))
+        m.add_command(label="복제(같은 폴더·주제로)", command=lambda: self.duplicate(iid))
+        m.add_command(label="재시작", command=lambda: self.restart(iid))
+        m.add_command(label="분리(팝아웃)", command=lambda: self.detach_selected(iid))
         m.add_separator()
-        m.add_command(label="종료", command=lambda: self.kill_selected(self._sel()))
-        m.add_command(label="목록에서 제거", command=lambda: self.remove_selected(self._sel()))
-        self.menu = m
+        m.add_command(label="종료", command=lambda: self.kill_selected(iid))
+        m.add_command(label="목록에서 제거", command=lambda: self.remove_selected(iid))
+        return m
+
+    def _folder_menu(self, fid):
+        m = tk.Menu(self.root, tearoff=0)
+        _style_menu(m)
+        m.add_command(label="✎ 그룹 이름 변경…", command=lambda: self.rename_folder(fid))
+        m.add_separator()
+        m.add_command(label="펼치기", command=lambda: self.tree.item(fid, open=True))
+        m.add_command(label="접기", command=lambda: self.tree.item(fid, open=False))
+        return m
 
     def _popup_menu(self, e):
-        iid = self.tree.identify_row(e.y)
-        if iid:
-            self._suppress_fg = True   # 선택→show_selected가 콘솔로 포커스 뺏어 메뉴가 닫히던 버그 방지
-            self.tree.selection_set(iid)
-            try:
-                self.menu.tk_popup(e.x_root, e.y_root)
-            finally:
-                self.menu.grab_release()
-                self._suppress_fg = False
+        row = self.tree.identify_row(e.y)
+        if not row:
+            return
+        self._suppress_fg = True   # 선택→show_selected가 콘솔로 포커스 뺏어 메뉴가 닫히던 버그 방지
+        self.tree.selection_set(row)
+        m = self._agent_menu(row) if row in self.agents else self._folder_menu(row)
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
+            self._suppress_fg = False
+
+    # ================= 그룹(폴더) 이름/이동 =================
+    def rename_folder(self, fid=None):
+        fid = fid or self._sel()
+        if not fid:
+            return
+        cur = next((k for k, v in self.folders.items() if v == fid), None)
+        if cur is None:
+            return
+        new = simpledialog.askstring("그룹 이름 변경", "새 그룹 이름:",
+                                     initialvalue=cur, parent=self.root)
+        if not new or not new.strip() or new.strip() == cur:
+            return
+        new = new.strip()
+        if new in self.folders and self.folders[new] != fid:   # 같은 이름 → 합치기
+            target = self.folders[new]
+            for iid in list(self.tree.get_children(fid)):
+                self.tree.move(iid, target, "end")
+                if iid in self.agents:
+                    self.agents[iid]["group"] = new
+            self.tree.delete(fid)
+        else:
+            self.tree.item(fid, text=f"📁 {new}")
+            self.folders[new] = fid
+            for iid in self.tree.get_children(fid):
+                if iid in self.agents:
+                    self.agents[iid]["group"] = new
+        self.folders.pop(cur, None)
+        self._toast(f"그룹 이름: {cur} → {new}")
+        self._update_info()
+
+    def move_to_group(self, iid, group):
+        if iid not in self.agents:
+            return
+        group = (group or "기타").strip() or "기타"
+        fid = self._folder_for(group)
+        self.tree.move(iid, fid, "end")
+        self.agents[iid]["group"] = group
+        self._prune_folders()
+        self.tree.selection_set(iid)
+        self.tree.see(iid)
+        self._toast(f"{self.agents[iid]['topic']} → 그룹 ‘{group}’")
+
+    def move_to_new_group(self, iid):
+        name = simpledialog.askstring("새 그룹", "새 그룹 이름:", parent=self.root)
+        if name and name.strip():
+            self.move_to_group(iid, name.strip())
+
+    def _on_double(self, e):
+        """더블클릭: 에이전트=이름변경, 그룹=이름변경(없으면 펼치기/접기 기본동작)."""
+        row = self.tree.identify_row(e.y)
+        if not row:
+            return
+        if row in self.agents:
+            self.rename(row)
+            return "break"
+        self.rename_folder(row)
+        return "break"
 
     def _bind_keys(self):
         r = self.root
@@ -864,9 +962,12 @@ class App:
         if not self._drag_iid:
             return
         tgt = self.tree.identify_row(e.y)
-        if tgt and tgt != self._drag_iid:
+        if not tgt or tgt == self._drag_iid:
+            return
+        pa = self.tree.parent(self._drag_iid)      # 같은 폴더 안에서만 순서변경
+        if pa and self.tree.parent(tgt) == pa:
             try:
-                self.tree.move(self._drag_iid, "", self.tree.index(tgt))
+                self.tree.move(self._drag_iid, pa, self.tree.index(tgt))
             except Exception:
                 pass
 
@@ -1187,11 +1288,22 @@ class App:
         for s in sess:
             tool = {"name": s.get("tool", "Claude"), "cmd": s.get("cmd", ""),
                     "heavy": s.get("heavy", False)}
-            self._spawn(s.get("path"), s.get("topic", "세션"), s.get("proj", ""), tool)
+            self._spawn(s.get("path"), s.get("topic", "세션"), s.get("proj", ""),
+                        tool, s.get("group"))
+
+    def _layout_name(self, n):
+        return {1: "단일", 2: "2분할", 4: "4분할"}.get(n, f"{n}칸")
+
+    def _update_layout_label(self):
+        try:
+            self.split_btn.config(text=f"화면: {self._layout_name(self.layout)} ▾")
+        except Exception:
+            pass
 
     def set_layout(self, n):
         self.layout = n
         self.v_layout.set(n)
+        self._update_layout_label()
         if n > 1:
             slots = (self.slots + [None] * n)[:n]
             placed = set(x for x in slots if x)
@@ -1330,20 +1442,22 @@ class App:
             return
         self.root.after(100, lambda: self._poll_console(before, p, on_ready, on_fail, tries + 1))
 
-    def _spawn(self, path, topic, proj_name, tool):
-        self._pending.append((path, topic, proj_name, tool))
+    def _spawn(self, path, topic, proj_name, tool, group=None):
+        self._pending.append((path, topic, proj_name, tool, group))
         self._pump()
 
     def _pump(self):
         if self._busy or not self._pending:
             return
-        path, topic, proj_name, tool = self._pending.pop(0)
+        path, topic, proj_name, tool, group = self._pending.pop(0)
+        grp = (group or proj_name or "기타")
         self._busy = True
         self.counter += 1
 
         def ready(pid, hwnd):
-            iid = self.tree.insert("", "end", values=(f"● {topic}", "00:00"), tags=("run",))
-            self.agents[iid] = dict(pid=pid, hwnd=hwnd, topic=topic, proj=proj_name,
+            fid = self._folder_for(grp)
+            iid = self.tree.insert(fid, "end", text=f"● {topic}", values=("00:00",), tags=("run",))
+            self.agents[iid] = dict(pid=pid, hwnd=hwnd, topic=topic, proj=proj_name, group=grp,
                                     path=path, tool=tool["name"], cmd=tool.get("cmd", ""),
                                     heavy=bool(tool.get("heavy")), start_ts=time.time(), alive=True)
             self._hide_placeholder()
@@ -1423,7 +1537,8 @@ class App:
 
         spawn_tool = dict(tool)
         spawn_tool["cmd"] = cmd
-        topic = mark + (self.topic_var.get().strip() or tool["name"])
+        # 주제를 비워두면 창이 다 똑같아 보임 → 도구명+번호로라도 구분되게
+        topic = mark + (self.topic_var.get().strip() or f"{tool['name']} {len(self.agents) + 1}")
         proj_name = self.proj_var.get()
         self._spawn(path, topic, proj_name, spawn_tool)
         self._remember_topic(self.topic_var.get())
@@ -1443,7 +1558,7 @@ class App:
                 "heavy": a.get("heavy", False)}
         if not self._heavy_ok(tool):
             return
-        self._spawn(a["path"], a["topic"], a["proj"], tool)
+        self._spawn(a["path"], a["topic"], a["proj"], tool, a.get("group"))
 
     # ================= 표시/전환 =================
     def show_selected(self):
@@ -1491,7 +1606,7 @@ class App:
 
     def remove_selected(self, iid=None):
         iid = iid or self._sel()
-        if not iid:
+        if not iid or iid not in self.agents:
             return
         a = self.agents.pop(iid, None)
         if a and u.IsWindow(a["hwnd"]):
@@ -1500,6 +1615,7 @@ class App:
         self.slots = [None if s == iid else s for s in self.slots]
         if self.active == iid:
             self.active = None
+        self._prune_folders()
         self._relayout()
         self._update_info()
 
@@ -1508,6 +1624,7 @@ class App:
         for iid in gone:
             self.agents.pop(iid, None)
             self.tree.delete(iid)
+        self._prune_folders()
         self._toast(f"종료된 에이전트 {len(gone)}개 정리됨")
 
     def restart(self, iid=None):
@@ -1522,7 +1639,7 @@ class App:
 
         def ready(pid, hwnd):
             a["pid"], a["hwnd"], a["start_ts"], a["alive"] = pid, hwnd, time.time(), True
-            self.tree.item(iid, values=(f"● {a['topic']}", "00:00"), tags=("run",))
+            self.tree.item(iid, text=f"● {a['topic']}", values=("00:00",), tags=("run",))
             if self.active == iid or self.tree.selection() == (iid,):
                 self.tree.selection_set(iid)
                 self.show_selected()
@@ -1577,7 +1694,34 @@ class App:
 
     # ================= 단축키 helper =================
     def _children(self):
-        return list(self.tree.get_children(""))
+        # 폴더 안의 에이전트(잎 노드)들을 화면 순서대로 평탄화
+        out = []
+        for fid in self.tree.get_children(""):
+            out.extend(self.tree.get_children(fid))
+        return out
+
+    def _folder_for(self, proj):
+        """프로젝트명에 해당하는 폴더 노드를 찾거나 새로 만든다."""
+        key = proj or "기타"
+        fid = self.folders.get(key)
+        if fid and self.tree.exists(fid):
+            return fid
+        label = key
+        if label.startswith("📁 "):
+            label = os.path.basename(label[2:].rstrip("\\")) or label[2:]
+        fid = self.tree.insert("", "end", text=f"📁 {label}", open=True,
+                               tags=("folder",), values=("",))
+        self.folders[key] = fid
+        return fid
+
+    def _prune_folders(self):
+        """빈 폴더 노드 제거."""
+        for key, fid in list(self.folders.items()):
+            if not self.tree.exists(fid):
+                self.folders.pop(key, None)
+            elif not self.tree.get_children(fid):
+                self.tree.delete(fid)
+                self.folders.pop(key, None)
 
     def _cycle(self, step):
         ch = self._children()
@@ -1611,22 +1755,29 @@ class App:
     def _refresh_loop(self):
         run = 0
         died_names = []
-        for idx, iid in enumerate(self._children()):
-            a = self.agents.get(iid)
-            if not a:
-                continue
-            prev = a.get("alive", True)
-            alive = bool(u.IsWindow(a["hwnd"]))
-            if alive:
-                run += 1
-            badge = CIRCLED[idx] if idx < 9 else "  "
-            dot = "●" if alive else "○"
-            up = fmt_uptime(a["start_ts"]) if alive else "—"
-            self.tree.item(iid, values=(f"{badge} {dot} {a['topic']}", up),
-                           tags=("run" if alive else "dead",))
-            a["alive"] = alive
-            if prev and not alive:
-                died_names.append(a["topic"])
+        idx = 0
+        for fid in self.tree.get_children(""):
+            frun = ftot = 0
+            for iid in self.tree.get_children(fid):
+                a = self.agents.get(iid)
+                if not a:
+                    continue
+                ftot += 1
+                prev = a.get("alive", True)
+                alive = bool(u.IsWindow(a["hwnd"]))
+                if alive:
+                    run += 1
+                    frun += 1
+                badge = CIRCLED[idx] if idx < 9 else "  "
+                dot = "●" if alive else "○"
+                up = fmt_uptime(a["start_ts"]) if alive else "—"
+                self.tree.item(iid, text=f"{badge} {dot} {a['topic']}", values=(up,),
+                               tags=("run" if alive else "dead",))
+                a["alive"] = alive
+                if prev and not alive:
+                    died_names.append(a["topic"])
+                idx += 1
+            self.tree.item(fid, values=(f"{frun}/{ftot}",))
         if died_names:
             self._relayout()
             self._toast("종료됨: " + ", ".join(died_names[:3]))
@@ -1656,6 +1807,7 @@ class App:
             "restore_session": self.opt_restore,
             "nice_console": self.opt_console_font,
             "session": [{"topic": a["topic"], "path": a["path"], "proj": a["proj"],
+                         "group": a.get("group", a.get("proj", "")),
                          "tool": a.get("tool", "Claude"), "cmd": a.get("cmd", ""),
                          "heavy": a.get("heavy", False)} for a in live],
         })
