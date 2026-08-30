@@ -25,6 +25,9 @@ tkinter로 만들었다.
 
 `에이전트 관리.lnk` 실행. 설정은 `console_config.json`과 `projects.json`에 있다.
 
+둘 다 개인 경로가 들어가서 저장소에는 올리지 않았다. `*.example.json`을 복사해 쓰면 된다.
+파일이 없으면 코드 안의 기본값으로 동작한다. `launcher.ps1`도 같은 `projects.json`을 읽는다.
+
 ## 후속
 
 이 앱의 오버레이 방식이 conhost와 계속 충돌해서, ConPTY로 다시 만든 것이

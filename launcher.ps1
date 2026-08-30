@@ -10,6 +10,23 @@ $projects = [ordered]@{
   '6' = @{ name = '창업 폴더 전체'; path = 'C:\Users\USER\Desktop\창업' }
 }
 
+# 실제 목록은 projects.json(개인 경로라 저장소에 안 올라감)에서 읽는다.
+# 파일이 없으면 위 기본값 그대로 동작한다. 콘솔 앱(agent_console.py)과 같은 파일을 쓴다.
+$pf = Join-Path $PSScriptRoot 'projects.json'
+if (Test-Path $pf) {
+  try {
+    $loaded = Get-Content $pf -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($loaded) {
+      $projects = [ordered]@{}
+      $i = 1
+      foreach ($p in $loaded) {
+        $projects["$i"] = @{ name = $p.name; path = $p.path }
+        $i++
+      }
+    }
+  } catch { }
+}
+
 while ($true) {
   Clear-Host
   Write-Host ''
